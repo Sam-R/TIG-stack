@@ -1,0 +1,88 @@
+version: '3'
+
+# To Do:
+# - Setup defined networks to protect influxdb and telegraf
+# - Define a backup process for data
+# - Monitor implications of version tags/docker container lifecycles
+
+services: 
+
+    # MQTT Broker, handles data from sensors
+    # https://hub.docker.com/_/eclipse-mosquitto
+    mosquitto:
+        # Name this container so other containers can find it easily
+        # Name used in: 
+        # - Telegraf config
+        container_name: mosquitto
+        image: eclipse-mosquitto:1.6
+        ports:
+            - "1883:1883"
+            - "9001:9001"
+        depends_on: 
+            - influxdb
+        restart: always
+        volumes:
+            # Use a volume for storage
+            # since influxdb stores data long term this might not be needed?
+            - mosquitto-storage:/mosquitto/data
+    
+    # Data storage
+    # https://hub.docker.com/_/influxdb
+    influxdb:
+        # Name this container so other containers can find it easily
+        # Name used in: 
+        # - Grafana data source 
+        # - Telegraf config
+        container_name: influxdb
+        image: influxdb:1.5
+        ports:
+            - "8086:8086"
+        environment:
+            # Change these and match them to the telegraf config
+            - INFLUXDB_DB=sensors
+            - INFLUXDB_ADMIN_USER=admin
+            - INFLUXDB_ADMIN_PASSWORD=telegraf
+            - INFLUXDB_USER=telegraf
+            - INFLUXDB_PASSWORD=telegraf
+        restart: always
+        volumes:
+          # Data persistency (could also be a bind mount: /srv/docker/influxdb/data:/var/lib/influxdb)
+          - influxdb-storage:/var/lib/influxdb
+          # Backups...
+          - ./influxdb-backup:/backup
+          # Host can run the following on a crontab, then rsnapshot can pickup (NOTE: for this to run in cron, -d must be specified):
+          # docker exec -d influxdb influxd backup -database sensors /backup
+
+    # Message formatter (MQTT -> InfluxDB)
+    # https://hub.docker.com/_/telegraf
+    telegraf: 
+        image: telegraf:1.11
+        restart: always
+        ports: 
+            - "5050:5050"
+        depends_on: 
+            - influxdb
+        volumes:
+            # This file needs edited with your MQTT topics, host, etc
+            - .docker/telegraf/telegraf.conf:/etc/telegraf/telegraf.conf:ro
+
+    # Dashboard/graphing
+    # https://hub.docker.com/r/grafana/grafana
+    grafana: 
+        # Grafana tags are a mess! just use whatever...
+        image: grafana/grafana
+        links:
+            - influxdb
+        hostname: grafana
+        ports:
+            - "3000:3000"
+        depends_on: 
+            - influxdb
+        volumes:
+            # Grafana gets grumpy over bind mount permissions, use a volume
+            - grafana-storage:/var/lib/grafana
+
+volumes:
+    mosquitto-storage:
+    influxdb-storage:
+    grafana-storage:
